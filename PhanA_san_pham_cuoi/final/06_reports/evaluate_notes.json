@@ -1,0 +1,6 @@
+{
+  "notes": [
+    "test_skew: CHƯA có nhãn người (--human) nên chưa chấm. Không dùng nhãn gốc để chấm Test lệch."
+  ],
+  "invalid_policy": "wrong"
+}

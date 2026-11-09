@@ -1,0 +1,594 @@
+{
+  "name": "CRM",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-webhook-input",
+        "options": {}
+      },
+      "name": "1. Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -560,
+        80
+      ],
+      "id": "a9e32848-9c0b-431c-917e-eb12101bdd9b",
+      "typeVersion": 2.1,
+      "webhookId": "cd2958b3-7a51-4fdd-a1b9-334faded0917"
+    },
+    {
+      "parameters": {
+        "schema": "public",
+        "table": "reviews",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "name": "2. Save Raw Review",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -368,
+        80
+      ],
+      "id": "9d981a29-de35-4f0a-9470-a96cefa3c5e2",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.your-tier1-sentiment.com/analyze",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.review_text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "3. T1 Sentiment API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        -160,
+        80
+      ],
+      "id": "df8b07b6-bea7-4f97-8764-9d370c4d4678",
+      "typeVersion": 4.3
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "1",
+                    "leftValue": "={{ $json.sentiment }}",
+                    "rightValue": "Positive",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "2",
+                    "leftValue": "={{ $json.sentiment }}",
+                    "rightValue": "Negative",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "4. Sentiment Switch",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        48,
+        80
+      ],
+      "id": "b9c9f0d7-f6fd-4252-872c-bd92c9d7144d",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": "public",
+        "table": "predictions",
+        "options": {}
+      },
+      "name": "Positive - Update DB",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        256,
+        -80
+      ],
+      "id": "ff6669d2-5ccf-4991-87e4-fde4c103b197",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "1",
+                    "leftValue": "={{ $('1. Webhook Trigger').item.json.customer_tier }}",
+                    "rightValue": "VIP",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "2",
+                    "leftValue": "={{ $('1. Webhook Trigger').item.json.customer_tier }}",
+                    "rightValue": "Regular",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "5. Tier Switch",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        256,
+        240
+      ],
+      "id": "69ce77e9-b2bf-46f6-b61b-a478d2170b7b",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Loop VIP",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        480,
+        128
+      ],
+      "id": "29f85dd5-55d8-4676-b800-1c8e5bab0d3e",
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Wait VIP",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        704,
+        128
+      ],
+      "id": "6a1095f4-df03-4965-8b7e-7913a8cb0b9d",
+      "typeVersion": 1.1,
+      "webhookId": "960ee3c4-7ba2-4965-a4a7-f72ef6bd85cb"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "claude-3-5-sonnet-20240620"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"user\", \"content\": \"Phân tích đánh giá VIP: {{ $('1. Webhook Trigger').item.json.review_text }}. Trả về JSON chứa issue_type, reason, response_draft.\"}]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "6A. Claude VIP",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        896,
+        128
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "82e070af-f4d5-440b-bd5a-cecb7de314a5",
+      "typeVersion": 4.3
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Loop Reg",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        480,
+        384
+      ],
+      "id": "4c20dc1d-c596-45c9-929c-ccadaa6d4c18",
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Wait Reg",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        704,
+        384
+      ],
+      "id": "6830abe6-92e2-40ea-9fbe-73e4eff03a2e",
+      "typeVersion": 1.1,
+      "webhookId": "3ada913a-13ab-4e47-8e77-1e56d1316390"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "claude-3-5-sonnet-20240620"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"user\", \"content\": \"Phân tích đánh giá Regular: {{ $('1. Webhook Trigger').item.json.review_text }}. Trả về JSON chứa issue_type, reason, response_draft.\"}]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "6B. Claude Regular",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        896,
+        384
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "22f9ea99-5559-4c2f-87e5-61357efad670",
+      "typeVersion": 4.3
+    },
+    {
+      "parameters": {},
+      "name": "7. JS Validate Schema",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1168,
+        240
+      ],
+      "id": "a57253b1-e951-4402-bfe7-5ae52c6dccad",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "schema": "public",
+        "table": "response_drafts",
+        "options": {}
+      },
+      "name": "8. Save Draft",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        1376,
+        240
+      ],
+      "id": "af33e50b-a65f-415f-9c1f-0f764c1c59ae",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_CHAT_ID",
+        "text": "=Cảnh báo Đánh giá Tiêu cực!\nKhách hàng: {{ $('1. Webhook Trigger').item.json.customer_name }}\nVấn đề: {{ $json.issue_type }}\nLý do: {{ $json.reason }}\n\nDự thảo phản hồi: {{ $json.response_draft }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Duyệt",
+                    "additionalFields": {}
+                  },
+                  {
+                    "text": "Chỉnh sửa",
+                    "additionalFields": {}
+                  },
+                  {
+                    "text": "Từ chối",
+                    "additionalFields": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {}
+      },
+      "name": "9. Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        1600,
+        240
+      ],
+      "id": "961d2f34-fbf9-42d1-9ea6-7bcb70ca70e6",
+      "typeVersion": 1.2,
+      "webhookId": "0d4cb7f1-1f98-4f0a-90ed-d8423a6a1dc4"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1. Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "2. Save Raw Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Save Raw Review": {
+      "main": [
+        [
+          {
+            "node": "3. T1 Sentiment API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. T1 Sentiment API": {
+      "main": [
+        [
+          {
+            "node": "4. Sentiment Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Sentiment Switch": {
+      "main": [
+        [
+          {
+            "node": "Positive - Update DB",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "5. Tier Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Tier Switch": {
+      "main": [
+        [
+          {
+            "node": "Loop VIP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Reg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop VIP": {
+      "main": [
+        [
+          {
+            "node": "Wait VIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait VIP": {
+      "main": [
+        [
+          {
+            "node": "6A. Claude VIP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6A. Claude VIP": {
+      "main": [
+        [
+          {
+            "node": "7. JS Validate Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Reg": {
+      "main": [
+        [
+          {
+            "node": "Wait Reg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Reg": {
+      "main": [
+        [
+          {
+            "node": "6B. Claude Regular",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6B. Claude Regular": {
+      "main": [
+        [
+          {
+            "node": "7. JS Validate Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. JS Validate Schema": {
+      "main": [
+        [
+          {
+            "node": "8. Save Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Save Draft": {
+      "main": [
+        [
+          {
+            "node": "9. Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ad8e396e-603e-496d-b152-5dbeca43442e",
+  "meta": {
+    "instanceId": "58cc480580f302b31ac8c42d470df5c3cc7abec35d99098288a5a3ac3b56a449"
+  },
+  "id": "839ewvuA7i1JsN4f",
+  "tags": []
+}

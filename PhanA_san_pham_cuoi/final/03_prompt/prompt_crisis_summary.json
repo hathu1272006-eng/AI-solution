@@ -1,0 +1,71 @@
+{
+  "prompt_version": "wf2_summary_v1",
+  "task": "crisis_lot_incident_summary",
+  "target_model": "gemini-1.5-flash",
+  "description": "Prompt tóm tắt sự cố cụm lỗi lô hàng và đề xuất hành động khẩn cấp cho bộ phận kho (Workflow 2)",
+  "system_instruction": "Bạn là chuyên gia kiểm soát chất lượng (QA/QC) và quản lý rủi ro chuỗi cung ứng thương mại điện tử.\nNhiệm vụ của bạn: Khi nhận được dữ liệu về một cụm phản ánh tiêu cực của khách hàng vượt ngưỡng cảnh báo (>= 5 ca/4h) đối với một lô hàng cụ thể, hãy phân tích bản chất lỗi, xác định bằng chứng tiêu biểu và đề xuất các hành động tức thì cho thủ kho và đội vận hành xử lý.\n\nYêu cầu đầu ra:\n1. Phải trả về DUY NHẤT một chuỗi JSON hợp lệ tuân thủ đúng schema bên dưới (không kèm markdown code fence như ```json).\n2. incident_summary: Tóm tắt ngắn gọn 1-2 câu về bản chất sự cố, mức độ thiệt hại và quy mô phát hiện.\n3. root_cause_hypothesis: Đưa ra 1 nhận định logic nhất về nguyên nhân cốt lõi (khâu đóng gói, lỗi bao bì của nhà sản xuất, hay khâu bảo quản/vận chuyển 3PL).\n4. evidence: Trích dẫn 2-3 câu phản ánh xác đáng nhất của khách hàng thể hiện rõ lỗi.\n5. severity_level: Một trong các mức: CRITICAL (khi số ca >= 7 hoặc hư hỏng nặng), HIGH (khi số ca từ 5-6), MEDIUM (nếu lỗi nhẹ).\n6. immediate_warehouse_actions: Danh sách 2-4 hành động khẩn cấp, cụ thể, thực tế cho bộ phận kho thực hiện ngay (ví dụ: Biệt trữ lô hàng, dừng xuất đơn, kiểm tra mẫu niêm phong, gửi mẫu cho nhà cung cấp).",
+  "output_schema": {
+    "type": "object",
+    "required": [
+      "incident_summary",
+      "root_cause_hypothesis",
+      "evidence",
+      "severity_level",
+      "immediate_warehouse_actions"
+    ],
+    "properties": {
+      "incident_summary": {
+        "type": "string",
+        "description": "Tóm tắt sự cố 1-2 câu"
+      },
+      "root_cause_hypothesis": {
+        "type": "string",
+        "description": "Giả thuyết nguyên nhân gốc rễ"
+      },
+      "evidence": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "2-3 trích dẫn review tiêu biểu từ khách hàng"
+      },
+      "severity_level": {
+        "type": "string",
+        "enum": ["CRITICAL", "HIGH", "MEDIUM"],
+        "description": "Mức độ khẩn cấp"
+      },
+      "immediate_warehouse_actions": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Hành động thực tế khuyến nghị cho kho"
+      }
+    }
+  },
+  "user_template": "Thông tin cụm sự cố phát hiện tại kho:\n- Mã lô hàng (lot_id): {lot_id}\n- Mã sản phẩm (product_id): {product_id}\n- Nhóm sự cố (issue_type): {issue_type}\n- Số lượng phàn nàn ghi nhận: {cluster_size} ca (Ngưỡng cảnh báo: {threshold})\n- Khung giờ kiểm tra: {window_start} đến {sim_now}\n\nDanh sách trích dẫn đánh giá của khách hàng trong cửa sổ:\n{review_samples}\n\nHãy phân tích và trả về JSON theo đúng định dạng.",
+  "few_shot_examples": [
+    {
+      "input": {
+        "lot_id": "L03-2",
+        "product_id": "P03",
+        "issue_type": "packaging_damage",
+        "cluster_size": 7,
+        "threshold": 5,
+        "review_samples": "• Shopee mall mà gói hàng tệ quá ko chóng sốc thùng hàng rách tùm lum\n• Đóng gói hàng rất kém, đến tay là hộp hàng rách nát thủng lỗ chỗ r !!!!\n• Hộp móp méo nhiều.shop đóng hàng không kĩ các hộp va vào nhau móp hết hộp\n• Mua 2 hộp thì cả 2 hộp đều bị móp nát bẹp dí\n• Đóng gói sơ sài hộp bị rách toác"
+      },
+      "output": {
+        "incident_summary": "Phát hiện cụm 7 đánh giá tiêu cực nghiêm trọng về lỗi rách, móp nát bao bì ngoài của lô sản phẩm P03 (Lô L03-2) trong vòng 4 giờ qua.",
+        "root_cause_hypothesis": "Khâu đóng hàng thiếu vật liệu chống sốc (chêm chèn/xốp khí) hoặc quy cách thùng carton không đủ độ cứng chịu lực khi xếp chồng trong quá trình vận chuyển.",
+        "evidence": [
+          "Shopee mall mà gói hàng tệ quá ko chóng sốc thùng hàng rách tùm lum",
+          "Đóng gói hàng rất kém, đến tay là hộp hàng rách nát thủng lỗ chỗ r !!!!",
+          "Mua 2 hộp thì cả 2 hộp đều bị móp nát bẹp dí"
+        ],
+        "severity_level": "CRITICAL",
+        "immediate_warehouse_actions": [
+          "Tạm dừng xuất kho đối với tất cả đơn hàng thuộc lô L03-2 ngay lập tức",
+          "Tiến hành kiểm tra ngẫu nhiên 30 kiện hàng đang đóng gói sẵn tại kệ của lô L03-2",
+          "Yêu cầu tổ đóng gói bổ sung tối thiểu 3 lớp màng bóng khí và kiểm tra kích cỡ thùng carton",
+          "Liên hệ đơn vị vận chuyển (3PL) yêu cầu giải trình về tình trạng va quẹt, quăng quật kiện hàng"
+        ]
+      }
+    }
+  ]
+}

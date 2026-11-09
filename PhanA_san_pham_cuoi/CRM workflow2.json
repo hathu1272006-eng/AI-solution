@@ -1,0 +1,504 @@
+{
+  "name": "CRM Workflow 2 - Cảnh báo Khủng hoảng & Lỗi lô hàng",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-wf2-crisis-alert",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "1. Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        -560,
+        200
+      ],
+      "id": "wf2-node-01-webhook",
+      "typeVersion": 2.1,
+      "webhookId": "9b12d345-6789-4abc-def0-123456789abc"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json || {};\nconst now = input.sim_now ? new Date(input.sim_now) : new Date();\nconst windowHours = Number(input.window_hours) || 4;\nconst threshold = Number(input.threshold) || 5;\nconst cooldownHours = Number(input.cooldown_hours) || 4;\nconst scenarioSet = input.scenario_set || '';\n\nconst windowStart = input.window_start \n  ? new Date(input.window_start) \n  : new Date(now.getTime() - windowHours * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    sim_now: now.toISOString(),\n    window_start: windowStart.toISOString(),\n    window_hours: windowHours,\n    threshold: threshold,\n    cooldown_hours: cooldownHours,\n    scenario_set: scenarioSet\n  }\n}];"
+      },
+      "name": "2. Config Parameters",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        -340,
+        200
+      ],
+      "id": "wf2-node-02-config",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  s.lot_id,\n  s.issue_type,\n  MAX(s.product_id) AS product_id,\n  COUNT(*)::int AS cluster_size,\n  MIN(s.created_at) AS earliest_review,\n  MAX(s.created_at) AS latest_review,\n  STRING_AGG('• ' || REPLACE(s.review_text, E'\\n', ' '), E'\\n') AS review_samples,\n  '{{ $json.sim_now }}'::timestamptz AS sim_now,\n  '{{ $json.window_start }}'::timestamptz AS window_start,\n  {{ $json.threshold }}::int AS threshold,\n  {{ $json.cooldown_hours }}::int AS cooldown_hours\nFROM scenario_reviews s\nWHERE s.issue_type <> 'none'\n  AND (('{{ $json.scenario_set }}' = '') OR (s.scenario_set = '{{ $json.scenario_set }}'))\n  AND s.created_at >= '{{ $json.window_start }}'::timestamptz\n  AND s.created_at <= '{{ $json.sim_now }}'::timestamptz\nGROUP BY s.lot_id, s.issue_type\nHAVING COUNT(*) >= {{ $json.threshold }}\nORDER BY cluster_size DESC;",
+        "options": {}
+      },
+      "name": "3. Query Incident Clusters",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        -120,
+        200
+      ],
+      "id": "wf2-node-03-query-clusters",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "1",
+                    "leftValue": "={{ $json.cluster_size }}",
+                    "rightValue": 0,
+                    "operator": {
+                      "type": "number",
+                      "operation": "gt"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "name": "4. Incidents Found Switch",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        100,
+        200
+      ],
+      "id": "wf2-node-04-switch-incidents",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    status: 'safe',\n    message: 'Quét hoàn tất: Không có lô hàng nào vượt ngưỡng cảnh báo (Hệ thống an toàn).',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Safe Status Log",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        320,
+        420
+      ],
+      "id": "wf2-node-14-safe-log",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "name": "5. Loop Clusters",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        320,
+        200
+      ],
+      "id": "wf2-node-05-loop-clusters",
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n  '{{ $json.lot_id }}' AS lot_id,\n  '{{ $json.issue_type }}' AS issue_type,\n  '{{ $json.product_id }}' AS product_id,\n  {{ $json.cluster_size }}::int AS cluster_size,\n  {{ $json.threshold }}::int AS threshold,\n  '{{ $json.sim_now }}'::timestamptz AS sim_now,\n  '{{ $json.window_start }}'::timestamptz AS window_start,\n  {{ $json.cooldown_hours }}::int AS cooldown_hours,\n  $review_samples${{ $json.review_samples }}$review_samples$ AS review_samples,\n  EXISTS (\n    SELECT 1 FROM alerts a\n    WHERE a.lot_id = '{{ $json.lot_id }}'\n      AND a.issue_type = '{{ $json.issue_type }}'\n      AND a.status <> 'false_alarm'\n      AND a.created_at >= ('{{ $json.sim_now }}'::timestamptz - INTERVAL '{{ $json.cooldown_hours }} hours')\n  ) AS is_in_cooldown;",
+        "options": {}
+      },
+      "name": "6. Check Cooldown",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        540,
+        200
+      ],
+      "id": "wf2-node-06-check-cooldown",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "1",
+                    "leftValue": "={{ $json.is_in_cooldown }}",
+                    "rightValue": false,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "2",
+                    "leftValue": "={{ $json.is_in_cooldown }}",
+                    "rightValue": true,
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "7. Cooldown Switch",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        760,
+        200
+      ],
+      "id": "wf2-node-07-cooldown-switch",
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{\n  json: {\n    status: 'cooldown_suppressed',\n    message: `[Cooldown Active] Lô ${item.lot_id} sự cố ${item.issue_type} (${item.cluster_size} ca) đã được cảnh báo trong vòng ${item.cooldown_hours}h qua. Tự động bỏ qua chống gửi trùng.`,\n    lot_id: item.lot_id,\n    issue_type: item.issue_type,\n    cluster_size: item.cluster_size,\n    sim_now: item.sim_now\n  }\n}];"
+      },
+      "name": "13. Cooldown Suppressed Log",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        980,
+        340
+      ],
+      "id": "wf2-node-13-cooldown-log",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "8. Wait Rate Limit",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        980,
+        80
+      ],
+      "id": "wf2-node-08-wait",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY || 'YOUR_GEMINI_API_KEY' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"Bạn là chuyên gia QA/QC kho vận và xử lý khủng hoảng chuỗi cung ứng e-commerce.\\nHãy phân tích cụm đánh giá tiêu cực vượt ngưỡng cảnh báo sau:\\n- Mã lô (lot_id): {{ $json.lot_id }}\\n- Mã sản phẩm: {{ $json.product_id }}\\n- Loại sự cố: {{ $json.issue_type }}\\n- Số lượng review tiêu cực trong 4h: {{ $json.cluster_size }} ca (Ngưỡng cảnh báo: {{ $json.threshold }})\\n- Khung giờ: {{ $json.window_start }} đến {{ $json.sim_now }}\\n\\nDanh sách trích dẫn đánh giá của khách hàng:\\n{{ $json.review_samples }}\\n\\nHãy trả về kết quả định dạng JSON với schema sau (không dùng markdown codeblock):\\n{\\n  \\\"incident_summary\\\": \\\"Tóm tắt 1-2 câu về bản chất sự cố và mức độ ảnh hưởng\\\",\\n  \\\"root_cause_hypothesis\\\": \\\"Nguyên nhân cốt lõi khả dĩ nhất (đóng gói/vận chuyển/chất lượng bao bì)\\\",\\n  \\\"evidence\\\": [\\\"Trích dẫn 1\\\", \\\"Trích dẫn 2\\\"],\\n  \\\"severity_level\\\": \\\"CRITICAL\\\",\\n  \\\"immediate_warehouse_actions\\\": [\\\"Hành động 1\\\", \\\"Hành động 2\\\", \\\"Hành động 3\\\"]\\n}\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "9. Gemini Incident Summarizer",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1200,
+        80
+      ],
+      "id": "wf2-node-09-gemini-summary",
+      "typeVersion": 4.3
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst prior = $(\"6. Check Cooldown\").first().json;\n\nlet aiData = {};\ntry {\n  if (item.candidates && item.candidates[0]?.content?.parts?.[0]?.text) {\n    const rawText = item.candidates[0].content.parts[0].text;\n    aiData = JSON.parse(rawText.replace(/```json/g, \"\").replace(/```/g, \"\").trim());\n  } else if (item.incident_summary) {\n    aiData = item;\n  }\n} catch (e) {\n  aiData = {\n    incident_summary: `Phát hiện cụm ${prior.cluster_size} đánh giá phản ánh lỗi ${prior.issue_type} tại lô ${prior.lot_id}.`,\n    root_cause_hypothesis: \"Nghi ngờ lỗi phát sinh từ khâu đóng gói hoặc đóng thùng vận chuyển.\",\n    evidence: [\"Chi tiết xem trong danh sách review mẫu.\"],\n    severity_level: prior.cluster_size >= prior.threshold * 1.5 ? \"CRITICAL\" : \"HIGH\",\n    immediate_warehouse_actions: [\n      `Tạm dừng xuất hàng đối với lô ${prior.lot_id}`,\n      \"Kiểm tra chất lượng bao bì và niêm phong các kiện chưa xuất kho\",\n      \"Phản hồi tổ đóng gói để kiểm tra lại quy cách bảo vệ\"\n    ]\n  };\n}\n\nconst summary = aiData.incident_summary || `Cụm lỗi ${prior.issue_type} vượt ngưỡng tại lô ${prior.lot_id}`;\nconst rootCause = aiData.root_cause_hypothesis || \"Chưa xác định\";\nconst severity = aiData.severity_level || \"CRITICAL\";\nconst evidenceList = Array.isArray(aiData.evidence) ? aiData.evidence : [aiData.evidence || \"\"];\nconst actions = Array.isArray(aiData.immediate_warehouse_actions) \n  ? aiData.immediate_warehouse_actions \n  : [\"Tạm dừng xuất kho lô hàng\", \"Tiến hành rà soát QC\"];\n\nconst telegramText = `🚨 [CẢNH BÁO KHỦNG HOẢNG LÔ HÀNG] 🚨\\n` +\n  `━━━━━━━━━━━━━━━━━━━━━━\\n` +\n  `📦 Lô hàng: ${prior.lot_id} (Sản phẩm: ${prior.product_id})\\n` +\n  `⚠️ Loại sự cố: ${prior.issue_type}\\n` +\n  `📊 Số ca ghi nhận: ${prior.cluster_size} review tiêu cực (Ngưỡng: ${prior.threshold})\\n` +\n  `⏱ Cửa sổ giám sát: ${prior.window_start.substring(0, 16)} ➔ ${prior.sim_now.substring(0, 16)}\\n` +\n  `🔴 Mức độ: ${severity}\\n\\n` +\n  `🔍 TÓM TẮT SỰ CỐ (AI GEMINI):\\n${summary}\\n\\n` +\n  `💡 NGUYÊN NHÂN KHẢ DĨ:\\n${rootCause}\\n\\n` +\n  `💬 BẰNG CHỨNG KHÁCH HÀNG:\\n${evidenceList.map(e => `• \"${e}\"`).join(\"\\n\")}\\n\\n` +\n  `🛠 HÀNH ĐỘNG KHUYẾN NGHỊ CHO THỦ KHO:\\n${actions.map((a, i) => `${i + 1}. ${a}`).join(\"\\n\")}\\n` +\n  `━━━━━━━━━━━━━━━━━━━━━━\\n` +\n  `Trạng thái: ⏳ Chờ thủ kho xác nhận xử lý`;\n\nreturn [{\n  json: {\n    lot_id: prior.lot_id,\n    issue_type: prior.issue_type,\n    product_id: prior.product_id,\n    cluster_size: prior.cluster_size,\n    threshold: prior.threshold,\n    window_start: prior.window_start,\n    window_end: prior.sim_now,\n    sim_now: prior.sim_now,\n    incident_summary: summary,\n    root_cause: rootCause,\n    evidence: evidenceList.join(\" | \"),\n    severity: severity,\n    status: \"alerted\",\n    telegram_message: telegramText,\n    actions_suggested: actions.join(\"; \")\n  }\n}];"
+      },
+      "name": "10. Parse & Format Alert",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1420,
+        80
+      ],
+      "id": "wf2-node-10-format-alert",
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO alerts (\n  lot_id, issue_type, product_id, cluster_size, threshold,\n  window_start, window_end, sim_now, incident_summary, root_cause, evidence, severity, status, created_at\n) VALUES (\n  '{{ $json.lot_id }}',\n  '{{ $json.issue_type }}',\n  '{{ $json.product_id }}',\n  {{ $json.cluster_size }},\n  {{ $json.threshold }},\n  '{{ $json.window_start }}'::timestamptz,\n  '{{ $json.window_end }}'::timestamptz,\n  '{{ $json.sim_now }}'::timestamptz,\n  $body${{ $json.incident_summary }}$body$,\n  $body${{ $json.root_cause }}$body$,\n  $body${{ $json.evidence }}$body$,\n  '{{ $json.severity }}',\n  '{{ $json.status }}',\n  '{{ $json.sim_now }}'::timestamptz\n)\nRETURNING alert_id, lot_id, issue_type, status, created_at;",
+        "options": {}
+      },
+      "name": "11. Save Alert to DB",
+      "type": "n8n-nodes-base.postgres",
+      "position": [
+        1640,
+        80
+      ],
+      "id": "wf2-node-11-save-alert",
+      "typeVersion": 2.6,
+      "credentials": {
+        "postgres": {
+          "id": "V5Bd6nY5q9rE0LmZ",
+          "name": "Postgres account 89"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_WAREHOUSE_CHAT_ID",
+        "text": "={{ $('10. Parse & Format Alert').item.json.telegram_message }}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "✅ Đã xử lý (Kho đã khoanh vùng)",
+                    "additionalFields": {
+                      "callback_data": "=alert_resolve_{{ $json.alert_id }}"
+                    }
+                  },
+                  {
+                    "text": "❌ Báo nhầm (False Alarm)",
+                    "additionalFields": {
+                      "callback_data": "=alert_false_alarm_{{ $json.alert_id }}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {}
+      },
+      "name": "12. Telegram Warehouse Alert",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        1860,
+        80
+      ],
+      "id": "wf2-node-12-telegram-alert",
+      "typeVersion": 1.2
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1. Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "2. Config Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Config Parameters": {
+      "main": [
+        [
+          {
+            "node": "3. Query Incident Clusters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Query Incident Clusters": {
+      "main": [
+        [
+          {
+            "node": "4. Incidents Found Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Incidents Found Switch": {
+      "main": [
+        [
+          {
+            "node": "5. Loop Clusters",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Safe Status Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Loop Clusters": {
+      "main": [
+        [
+          {
+            "node": "6. Check Cooldown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Check Cooldown": {
+      "main": [
+        [
+          {
+            "node": "7. Cooldown Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Cooldown Switch": {
+      "main": [
+        [
+          {
+            "node": "8. Wait Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "13. Cooldown Suppressed Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Wait Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "9. Gemini Incident Summarizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9. Gemini Incident Summarizer": {
+      "main": [
+        [
+          {
+            "node": "10. Parse & Format Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10. Parse & Format Alert": {
+      "main": [
+        [
+          {
+            "node": "11. Save Alert to DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Save Alert to DB": {
+      "main": [
+        [
+          {
+            "node": "12. Telegram Warehouse Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12. Telegram Warehouse Alert": {
+      "main": [
+        [
+          {
+            "node": "5. Loop Clusters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13. Cooldown Suppressed Log": {
+      "main": [
+        [
+          {
+            "node": "5. Loop Clusters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "f1837a2e-4b65-4f3b-81d3-90d56a7bc123",
+  "meta": {
+    "instanceId": "58cc480580f302b31ac8c42d470df5c3cc7abec35d99098288a5a3ac3b56a449"
+  },
+  "id": "WF2CrisisAlertSystem",
+  "tags": []
+}
